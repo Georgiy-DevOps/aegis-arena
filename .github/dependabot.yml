@@ -6,6 +6,10 @@ updates:
     directory: /backend
     schedule:
       interval: weekly
+    # Supply-chain: не брать версию в первые 7 дней после публикации —
+    # за это время обычно успевают отозвать вредоносные релизы.
+    cooldown:
+      default-days: 7
     groups:
       python-deps:
         patterns: ["*"]
@@ -14,12 +18,20 @@ updates:
     directory: /backend
     schedule:
       interval: weekly
+    # Supply-chain: не брать версию в первые 7 дней после публикации —
+    # за это время обычно успевают отозвать вредоносные релизы.
+    cooldown:
+      default-days: 7
 
   # Обновляет SHA закреплённых GitHub Actions.
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    # Supply-chain: не брать версию в первые 7 дней после публикации —
+    # за это время обычно успевают отозвать вредоносные релизы.
+    cooldown:
+      default-days: 7
     groups:
       actions:
         patterns: ["*"]

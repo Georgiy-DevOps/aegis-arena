@@ -1,9 +1,11 @@
 import os
+import secrets
 
 # Тесты API идут на SQLite, без Postgres/Redis. Переменные задаются до импорта app.
 os.environ.setdefault("DATABASE_URL", "sqlite:///./test_aegis.db")
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
-os.environ.setdefault("JWT_SECRET", "test-secret-that-is-long-enough-0123456789")
+# Секрет генерируется на каждый прогон: никаких «тестовых» ключей в репозитории (Gitleaks это ловит)
+os.environ.setdefault("JWT_SECRET", secrets.token_urlsafe(48))
 os.environ.setdefault("APP_ENV", "test")
 
 import pytest  # noqa: E402
