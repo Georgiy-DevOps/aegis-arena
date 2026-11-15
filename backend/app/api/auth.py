@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
-from app.core.security import create_access_token, hash_password, verify_password
+from app.core.security import create_access_token, hash_password, verify_password_constant_time
 from app.db.models import User
 from app.db.session import get_db
 from app.schemas.auth import LoginRequest, RegisterRequest, TokenResponse
@@ -29,7 +29,12 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)):
 @router.post("/login", response_model=TokenResponse)
 def login(payload: LoginRequest, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.username == payload.username).first()
-    if not user or not verify_password(payload.password, user.password_hash):
+    # bcrypt выполняется и для несуществующего username — защита от user enumeration по таймингу.
+    # Порядок важен: сначала bcrypt, потом проверка user — иначе short-circuit вернёт утечку.
+    password_ok = verify_password_constant_time(
+        payload.password, user.password_hash if user else None
+    )
+    if user is None or not password_ok:
         raise HTTPException(status_code=401, detail="Invalid username or password.")
 
     if not user.is_active:
