@@ -46,7 +46,7 @@ An attacker guesses weak passwords or reuses leaked credentials.
 
 **Risk:** account takeover.
 
-**Current control:** password hashing and minimum password length.
+**Current control:** password hashing, minimum password length, identical errors and constant bcrypt work for unknown users (no username enumeration).
 
 **Future control:** rate limiting, login throttling, MFA option.
 
@@ -58,7 +58,7 @@ JWT is stolen from local storage or logs.
 
 **Risk:** account takeover until token expiry.
 
-**Current control:** token expiry.
+**Current control:** token expiry, mandatory `exp`/`sub` claims, HMAC-only algorithm allow-list, rejection of deactivated users.
 
 **Future control:** short-lived access tokens, refresh token rotation, secure client storage.
 
@@ -82,6 +82,26 @@ Database passwords or JWT secret are committed to GitHub.
 
 **Risk:** infrastructure compromise.
 
-**Current control:** `.env.example` only; real `.env` is ignored.
+**Current control:** `.env.example` only; real `.env` is ignored; Gitleaks scans full git history in CI; app refuses placeholder secrets outside local env.
 
-**Future control:** GitHub secret scanning, CI checks, managed secrets.
+**Future control:** managed secrets (Vault / cloud secret manager).
+
+---
+
+### 7. Score submission to a foreign room
+
+A player submits a result to a room they never joined.
+
+**Risk:** leaderboard manipulation, broken access control.
+
+**Current control:** room membership check, covered by a regression test.
+
+---
+
+### 8. Vulnerable dependencies and base image
+
+A known CVE in a library or OS package becomes exploitable.
+
+**Risk:** remote code execution, data exposure.
+
+**Current control:** pinned versions, pip-audit and Trivy gates in CI, weekly Dependabot updates.

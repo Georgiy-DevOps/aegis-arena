@@ -1,0 +1,218 @@
+# DevSecOps-пайплайн Aegis Arena.
+#
+# Слои проверки (shift-left → runtime):
+#   1. secrets   — Gitleaks по всей истории git
+#   2. sast      — Semgrep (OWASP Top 10, Python) + Bandit
+#   3. sca       — pip-audit по закреплённым зависимостям
+#   4. container — сборка образа, Trivy: CVE в образе + misconfig Dockerfile/compose
+#   5. dast      — поднимаем стек и атакуем живой API через OWASP ZAP (по OpenAPI-схеме)
+#
+# Находки SAST/secrets/container уходят в GitHub Code Scanning (вкладка Security).
+# Любая находка уровня HIGH/CRITICAL роняет пайплайн: это quality gate для merge.
+
+name: DevSecOps
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Еженедельный прогон: новые CVE появляются и в коде, который никто не трогал.
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+
+# Least privilege: по умолчанию токен только читает репозиторий.
+# Права на запись выдаются точечно на уровне job.
+permissions:
+  contents: read
+
+concurrency:
+  group: devsecops-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.12"
+  TRIVY_VERSION: "0.76.1"
+  GITLEAKS_VERSION: "8.30.0"
+
+jobs:
+  tests:
+    name: Unit + security regression tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      # Все actions закреплены по SHA коммита, а не по тегу: тег можно
+      # перевесить на вредоносный коммит (supply-chain атака как с tj-actions).
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: backend/requirements-dev.txt
+      - run: pip install -r requirements-dev.txt
+      - run: pytest -p no:cacheprovider -v
+        env:
+          PYTHONPATH: .
+
+  secrets:
+    name: Secrets (Gitleaks)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # вся история: секрет, удалённый в следующем коммите, всё равно утёк
+          persist-credentials: false
+      - name: Gitleaks scan
+        run: |
+          docker run --rm -v "$PWD:/repo" -w /repo \
+            --user "$(id -u):$(id -g)" \
+            "zricethezav/gitleaks:v${GITLEAKS_VERSION}" \
+            git /repo --redact --no-banner \
+            --report-format sarif --report-path /repo/gitleaks.sarif
+      - name: Upload SARIF
+        if: always() && hashFiles('gitleaks.sarif') != ''
+        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        with:
+          sarif_file: gitleaks.sarif
+          category: gitleaks
+
+  sast:
+    name: SAST (Semgrep + Bandit)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install scanners
+        run: pip install "semgrep==1.185.0" "bandit[sarif]==1.9.4"
+      - name: Semgrep
+        env:
+          SEMGREP_SEND_METRICS: "off"
+        run: |
+          semgrep scan \
+            --config p/python --config p/owasp-top-ten \
+            --config p/secrets --config p/dockerfile \
+            --metrics off --error \
+            --sarif-output=semgrep.sarif
+      - name: Bandit
+        if: always()
+        # -ll: от MEDIUM и выше; tests/ исключены (assert там нормален)
+        run: bandit -r backend/app -ll -f sarif -o bandit.sarif
+      - name: Upload Semgrep SARIF
+        if: always() && hashFiles('semgrep.sarif') != ''
+        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        with:
+          sarif_file: semgrep.sarif
+          category: semgrep
+      - name: Upload Bandit SARIF
+        if: always() && hashFiles('bandit.sarif') != ''
+        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        with:
+          sarif_file: bandit.sarif
+          category: bandit
+
+  sca:
+    name: Dependencies (pip-audit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - run: pip install "pip-audit==2.10.1"
+      - name: Audit dependencies
+        # --strict: если хоть одну зависимость не удалось разобрать — fail, а не тихий пропуск
+        run: pip-audit --strict --desc on -r backend/requirements-dev.txt
+
+  container:
+    name: Container (Trivy)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build image
+        run: docker build -t aegis-arena-backend:${{ github.sha }} backend
+      - name: Trivy — misconfig (Dockerfile, compose)
+        run: |
+          docker run --rm -v "$PWD:/src" "aquasec/trivy:${TRIVY_VERSION}" \
+            config --exit-code 1 --severity MEDIUM,HIGH,CRITICAL /src
+      - name: Trivy — image CVE (report)
+        if: always()
+        run: |
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "$PWD:/out" \
+            "aquasec/trivy:${TRIVY_VERSION}" image --scanners vuln \
+            --format sarif --output /out/trivy-image.sarif \
+            aegis-arena-backend:${{ github.sha }}
+      - name: Upload Trivy SARIF
+        if: always() && hashFiles('trivy-image.sarif') != ''
+        uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
+        with:
+          sarif_file: trivy-image.sarif
+          category: trivy-image
+      - name: Trivy — image CVE (gate)
+        # Gate только по исправимым HIGH/CRITICAL: на unfixed CVE команда повлиять не может,
+        # они видны в отчёте выше и разбираются отдельно.
+        run: |
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+            "aquasec/trivy:${TRIVY_VERSION}" image --scanners vuln \
+            --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 \
+            aegis-arena-backend:${{ github.sha }}
+
+  dast:
+    name: DAST (OWASP ZAP)
+    runs-on: ubuntu-latest
+    needs: [tests, container]
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Prepare CI environment
+        # Секрет генерируется на лету и живёт только в рамках job.
+        run: |
+          cp .env.example .env
+          sed -i "s|^JWT_SECRET=.*|JWT_SECRET=$(openssl rand -base64 48 | tr -d '\n/+=')|" .env
+          sed -i "s|^APP_ENV=.*|APP_ENV=ci|" .env
+          sed -i "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=ci_$(openssl rand -hex 12)|" .env
+          PASS=$(grep ^POSTGRES_PASSWORD= .env | cut -d= -f2)
+          sed -i "s|^DATABASE_URL=.*|DATABASE_URL=postgresql+psycopg2://aegis:${PASS}@postgres:5432/aegis_arena|" .env
+      - name: Start stack
+        run: docker compose up -d --build --wait --wait-timeout 120
+      - name: Smoke check
+        run: curl -fsS http://127.0.0.1:8000/health
+      - name: ZAP API scan
+        uses: zaproxy/action-api-scan@5158fe4d9d8fcc75ea204db81317cce7f9e5453d # v0.10.0
+        with:
+          target: http://127.0.0.1:8000/openapi.json
+          format: openapi
+          rules_file_name: .zap/rules.tsv
+          fail_action: true
+          allow_issue_writing: false
+          artifact_name: zap-report
+          cmd_options: "-a"
+      - name: Backend logs on failure
+        if: failure()
+        run: docker compose logs backend
+      - name: Stop stack
+        if: always()
+        run: docker compose down -v
