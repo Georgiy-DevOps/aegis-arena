@@ -372,6 +372,8 @@ Pipeline hardening:
 | Missing security headers, `server: uvicorn` banner | DAST baseline | headers middleware, `--no-server-header` |
 | Fixed HIGH CVEs in base image OS packages | Trivy | `apt-get upgrade` layer, Dependabot for base image |
 | No `HEALTHCHECK`, Postgres/Redis exposed on `0.0.0.0` | Trivy config / review | healthcheck, ports bound to `127.0.0.1`, `cap_drop: ALL`, `no-new-privileges` |
+| Hard-coded test JWT secret in git history | Gitleaks (first CI run) | secret generated per test run, history entry triaged in `.gitleaksignore` |
+| Dependabot could propose a just-published (possibly malicious) release | Semgrep (first CI run) | 7-day `cooldown` for every ecosystem |
 
 ---
 
