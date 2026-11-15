@@ -1,11 +1,14 @@
-fastapi
-uvicorn[standard]
-SQLAlchemy
-psycopg2-binary
-pydantic-settings
-python-jose[cryptography]
+# Runtime-зависимости. Версии закреплены: сканер SCA (pip-audit) и Dependabot
+# видят ровно то, что попадает в образ.
+fastapi==0.163.1
+uvicorn[standard]==0.54.0
+SQLAlchemy==2.1.8
+psycopg2-binary==2.9.13
+pydantic-settings==2.16.3
+# PyJWT вместо python-jose: у python-jose и его зависимости ecdsa есть
+# открытые уязвимости без фикса (см. docs/security_decisions.md).
+PyJWT==2.15.1
 passlib[bcrypt]==1.7.4
 bcrypt==4.0.1
-python-multipart
-redis
-pytest
+python-multipart==0.0.33
+redis==8.1.0

@@ -1,6 +1,7 @@
 # Aegis Arena
 
-[![Backend Tests](https://github.com/Georgy-GameDev/aegis-arena/actions/workflows/backend-tests.yml/badge.svg)](https://github.com/Georgy-GameDev/aegis-arena/actions/workflows/backend-tests.yml)
+[![DevSecOps](https://github.com/Georgiy-DevOps/aegis-arena/actions/workflows/devsecops.yml/badge.svg)](https://github.com/Georgiy-DevOps/aegis-arena/actions/workflows/devsecops.yml)
+[![CodeQL](https://github.com/Georgiy-DevOps/aegis-arena/actions/workflows/codeql.yml/badge.svg)](https://github.com/Georgiy-DevOps/aegis-arena/actions/workflows/codeql.yml)
 
 **Aegis Arena** is a secure multiplayer game backend prototype for a GameDevSecOps portfolio.
 
@@ -160,7 +161,9 @@ aegis-arena/
 
   .github/
     workflows/
-      backend-tests.yml
+      devsecops.yml
+      codeql.yml
+    dependabot.yml
 
   docker-compose.yml
   .env.example
@@ -175,7 +178,7 @@ aegis-arena/
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/Georgy-GameDev/aegis-arena.git
+git clone https://github.com/Georgiy-DevOps/aegis-arena.git
 cd aegis-arena
 ```
 
@@ -288,40 +291,89 @@ GET /leaderboard
 
 ## Run Tests
 
-Run backend tests inside the Docker container:
+Tests run on SQLite, no Docker needed:
 
 ```bash
-docker compose exec backend pytest -p no:cacheprovider
+cd backend
+pip install -r requirements-dev.txt
+PYTHONPATH=. pytest -p no:cacheprovider
 ```
 
 Expected result:
 
 ```text
-3 passed
+10 passed
 ```
 
-The current tests check:
-
-- valid score is accepted
-- impossible score is rejected
-- negative score is rejected
+The tests check score validation rules and security regressions:
+forged / `alg=none` / expired-claim JWTs, deactivated users, foreign-room score submission,
+security headers and identical login errors for unknown users.
 
 ---
 
 ## GitHub Actions
 
-The repository includes a GitHub Actions workflow:
+- `devsecops.yml` — tests, secrets, SAST, SCA, container scan and DAST (see [DevSecOps Pipeline](#devsecops-pipeline))
+- `codeql.yml` — CodeQL `security-extended` analysis
+- `dependabot.yml` — weekly updates for pip, Docker base image and pinned actions
+
+---
+
+## DevSecOps Pipeline
+
+Every push and pull request goes through a layered security pipeline
+([`.github/workflows/devsecops.yml`](.github/workflows/devsecops.yml)). A HIGH/CRITICAL finding fails the build, so insecure code cannot be merged silently.
 
 ```text
-.github/workflows/backend-tests.yml
+            push / PR / weekly cron
+                      |
+   +---------+--------+--------+-----------+
+   |         |        |        |           |
+ tests    secrets    SAST     SCA      container
+ pytest   Gitleaks  Semgrep  pip-audit  docker build
+ (API     (full     Bandit              Trivy: image CVE
+ abuse    history)  CodeQL              + Dockerfile/compose
+ cases)                                  misconfig
+   |                                       |
+   +------------------+--------------------+
+                      |
+                    DAST
+          docker compose up (CI secrets)
+          OWASP ZAP API scan via OpenAPI
+                      |
+           GitHub Code Scanning (SARIF)
 ```
 
-The workflow automatically runs backend tests on:
+| Layer | Tool | What it catches |
+|---|---|---|
+| Secrets | Gitleaks | API keys, passwords, tokens anywhere in git history |
+| SAST | Semgrep (OWASP Top 10), Bandit, CodeQL | injection, weak crypto, unsafe deserialization, taint flows |
+| SCA | pip-audit + Dependabot | known CVEs in pinned dependencies, weekly update PRs |
+| Container | Trivy | OS/library CVEs in the image, Dockerfile and compose misconfigurations |
+| DAST | OWASP ZAP | missing security headers, info leaks, injection on the running API |
+| Regression | pytest | `alg=none` JWT, forged tokens, deactivated users, foreign-room score submission |
 
-- push to `main`
-- pull requests
+Pipeline hardening:
 
-This provides a basic CI layer for the project.
+- every third-party action is pinned to a commit SHA (tag hijacking protection)
+- `GITHUB_TOKEN` is read-only by default; `security-events: write` only where SARIF is uploaded
+- `persist-credentials: false` on checkout
+- DAST runs with a per-run random `JWT_SECRET` and database password
+
+### Findings fixed while introducing the pipeline
+
+| Finding | Source | Fix |
+|---|---|---|
+| `python-jose` / `ecdsa` CVEs with no upstream fix | pip-audit | migrated to PyJWT, pinned all versions |
+| Any player could submit a score to a room they never joined | code review → regression test | room membership check (403) |
+| Deactivated user kept working with an old token | code review → regression test | `is_active` check in `get_current_user` |
+| Username enumeration via login timing | code review | bcrypt runs against a dummy hash for unknown users |
+| Placeholder `JWT_SECRET` accepted outside local env | code review | fail-fast settings validation |
+| Missing security headers, `server: uvicorn` banner | DAST baseline | headers middleware, `--no-server-header` |
+| Fixed HIGH CVEs in base image OS packages | Trivy | `apt-get upgrade` layer, Dependabot for base image |
+| No `HEALTHCHECK`, Postgres/Redis exposed on `0.0.0.0` | Trivy config / review | healthcheck, ports bound to `127.0.0.1`, `cap_drop: ALL`, `no-new-privileges` |
+| Hard-coded test JWT secret in git history | Gitleaks (first CI run) | secret generated per test run, history entry triaged in `.gitleaksignore` |
+| Dependabot could propose a just-published (possibly malicious) release | Semgrep (first CI run) | 7-day `cooldown` for every ecosystem |
 
 ---
 
@@ -369,8 +421,9 @@ Additional documentation is stored in the `docs/` folder:
 - [ ] health checks
 - [ ] structured logging
 - [ ] monitoring basics
-- [ ] dependency scanning
-- [ ] Docker hardening improvements
+- [x] dependency scanning
+- [x] Docker hardening improvements
+- [x] SAST, secret scanning, container scanning, DAST in CI
 
 ### Version 0.4 — Game Client
 
@@ -403,7 +456,7 @@ This project currently demonstrates:
 Current stage:
 
 ```text
-Working backend MVP with tests and CI
+Working backend MVP with security regression tests and a full DevSecOps pipeline
 ```
 
 Next major step:

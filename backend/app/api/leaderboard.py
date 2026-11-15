@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.core.security import get_current_user
-from app.db.models import Room, Score, User
+from app.db.models import Room, RoomPlayer, Score, User
 from app.db.session import get_db
 from app.schemas.leaderboard import ScoreResponse, SubmitScoreRequest
 from app.services.score_validation import validate_score
@@ -19,6 +19,16 @@ def submit_score(
     room = db.query(Room).filter(Room.id == payload.room_id).first()
     if not room:
         raise HTTPException(status_code=404, detail="Room not found.")
+
+    # Broken access control: без этой проверки любой игрок мог записать
+    # результат в чужую комнату, в которой он не участвовал.
+    is_member = (
+        db.query(RoomPlayer)
+        .filter(RoomPlayer.room_id == payload.room_id, RoomPlayer.user_id == current_user.id)
+        .first()
+    )
+    if not is_member:
+        raise HTTPException(status_code=403, detail="You are not a player in this room.")
 
     is_valid, status_reason = validate_score(
         score=payload.score,

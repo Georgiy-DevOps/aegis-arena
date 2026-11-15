@@ -1,0 +1,37 @@
+# Автообновления зависимостей. Закреплённые версии без обновлений = накопление CVE,
+# поэтому Dependabot каждую неделю открывает PR, а DevSecOps-пайплайн их проверяет.
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: /backend
+    schedule:
+      interval: weekly
+    # Supply-chain: не брать версию в первые 7 дней после публикации —
+    # за это время обычно успевают отозвать вредоносные релизы.
+    cooldown:
+      default-days: 7
+    groups:
+      python-deps:
+        patterns: ["*"]
+
+  - package-ecosystem: docker
+    directory: /backend
+    schedule:
+      interval: weekly
+    # Supply-chain: не брать версию в первые 7 дней после публикации —
+    # за это время обычно успевают отозвать вредоносные релизы.
+    cooldown:
+      default-days: 7
+
+  # Обновляет SHA закреплённых GitHub Actions.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    # Supply-chain: не брать версию в первые 7 дней после публикации —
+    # за это время обычно успевают отозвать вредоносные релизы.
+    cooldown:
+      default-days: 7
+    groups:
+      actions:
+        patterns: ["*"]

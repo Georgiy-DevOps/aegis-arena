@@ -8,3 +8,6 @@ venv/
 .vscode/
 .DS_Store
 *.log
+
+# Тестовая SQLite-база
+test_aegis.db

@@ -1,0 +1,3 @@
+# Триаж находок Gitleaks. Каждая строка — с обоснованием.
+# Случайная строка для тестов, не реальный ключ; в следующем коммите заменена на secrets.token_urlsafe().
+c737ad15bbcc42851fd1b2a3f880a54341fdadf8:backend/tests/conftest.py:generic-api-key:6
